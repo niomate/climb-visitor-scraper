@@ -114,6 +114,7 @@ dependencies = [
  "influxdb",
  "reqwest",
  "scraper",
+ "selectors",
  "serde",
  "serde_json",
  "tokio",
