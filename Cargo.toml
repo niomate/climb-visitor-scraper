@@ -8,10 +8,15 @@ edition = "2018"
 
 [dependencies]
 scraper = "0.12.0"
-influxdb = { version = "0.1.0", features = ["derive"] }
 reqwest = "0.10.8"
 tokio = { version = "0.2.22", features = ["full"] }
-chrono = "0.4.19"
 serde = "1.0.116"
 serde_json = "1.0.58"
-selectors = "0.22.0"
+serde_derive = "1.0.116"
+bson = "1.1.0"
+chrono = {version="0.4.19",features = ["serde"]}
+
+[dependencies.mongodb]
+version = "1.1.1"
+default-features = false
+features = ["tokio-runtime"]
