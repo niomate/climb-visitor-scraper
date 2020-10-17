@@ -1,6 +1,5 @@
-extern crate bson;
 extern crate chrono;
-extern crate mongodb;
+extern crate influxdb;
 extern crate scraper;
 extern crate serde;
 extern crate thiserror;
@@ -10,18 +9,17 @@ extern crate tokio;
 extern crate clap;
 
 use chrono::{DateTime, Utc};
-use mongodb::Client;
+use influxdb::{Client, InfluxDbWriteable};
 use scraper::{Html, Selector};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::{fmt, fs, io};
 use tokio::time::{self, Duration};
 
 const BASE_URL: &str =
     "https://www.boulderado.de/boulderadoweb/gym-clientcounter/index.php?mode=get&token=";
 const DB: &str = "climbing";
-const COLLECTION: &str = "visitors";
 const DEFAULT_HOST: &str = "localhost";
-const DEFAULT_IP: &str = "27017";
+const DEFAULT_IP: &str = "8086";
 const DEFAULT_TOKEN_PATH: &str = "tokens.json";
 
 #[derive(Debug, thiserror::Error)]
@@ -30,17 +28,16 @@ enum MainError {
     JsonParseError(#[from] serde_json::Error),
     #[error("FileError")]
     FileError(#[from] io::Error),
-    #[error("DbConnectionError")]
-    DbConnectionError(#[from] mongodb::error::Error),
     #[error("SiteFetchError")]
     SiteFetchError(#[from] reqwest::Error),
-    #[error("BsonConversionError")]
-    BsonConversionError(#[from] bson::ser::Error),
+    #[error("QueryError")]
+    QueryError(influxdb::Error),
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, InfluxDbWriteable)]
 struct VisitorCount {
     time: DateTime<Utc>,
+    #[tag]
     location: String,
     free: i32,
     occupied: i32,
@@ -86,11 +83,6 @@ fn extract_count(doc: &Html, selector: &Selector) -> i32 {
     }
 }
 
-async fn connect_db(host: &str) -> Result<mongodb::Collection, MainError> {
-    let client = Client::with_uri_str(host).await?;
-    Ok(client.database(DB).collection(COLLECTION))
-}
-
 fn read_tokens(path: &str) -> Result<Vec<LocationToken>, MainError> {
     let url_file = fs::File::open(path)?;
     let reader = io::BufReader::new(url_file);
@@ -128,10 +120,10 @@ async fn main() -> Result<(), MainError> {
     });
     let once = matches.is_present("ONCE");
 
-    let host = format!("mongodb://{}:{}", host, ip);
+    let host = format!("http://{}:{}", host, ip);
 
     // Establish connection to MongoDB
-    let collection = connect_db(&host).await?;
+    let client = Client::new(host, DB);
 
     // Read boulderado tokens for different climbing gyms
     let tokens = read_tokens(&token_path)?;
@@ -141,22 +133,20 @@ async fn main() -> Result<(), MainError> {
     loop {
         interval.tick().await;
 
-        let mut docs = Vec::new();
-
         for LocationToken { location, token } in &tokens {
             let html = fetch_site_from_token(token).await?;
 
             let visitor_count = VisitorCount::from_html(location, &html);
 
             println!("{}", visitor_count);
-            let bson_doc = bson::to_document(&visitor_count)?;
-            docs.push(bson_doc);
+            client
+                .query(&visitor_count.into_query("visitors"))
+                .await
+                .map_err(MainError::QueryError)?;
         }
 
-        collection.insert_many(docs, None).await?;
-
         if once {
-            break Ok(())
+            break Ok(());
         }
     }
 }
